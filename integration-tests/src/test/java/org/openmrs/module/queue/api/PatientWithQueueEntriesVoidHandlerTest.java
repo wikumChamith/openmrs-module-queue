@@ -25,7 +25,9 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openmrs.Patient;
+import org.openmrs.Visit;
 import org.openmrs.api.PatientService;
+import org.openmrs.api.VisitService;
 import org.openmrs.api.context.Context;
 import org.openmrs.module.queue.SpringTestConfiguration;
 import org.openmrs.module.queue.api.search.QueueEntrySearchCriteria;
@@ -61,6 +63,9 @@ public class PatientWithQueueEntriesVoidHandlerTest extends BaseModuleContextSen
 	
 	@Autowired
 	private PatientService patientService;
+	
+	@Autowired
+	private VisitService visitService;
 	
 	private Patient patient;
 	
@@ -211,5 +216,31 @@ public class PatientWithQueueEntriesVoidHandlerTest extends BaseModuleContextSen
 		QueueEntry independentlyVoided = queueEntryService.getQueueEntryById(10).get();
 		assertThat(independentlyVoided.getVoided(), is(true));
 		assertThat(independentlyVoided.getDateVoided(), notNullValue());
+	}
+	
+	@Test
+	public void shouldUnvoidQueueEntriesThatWouldNoLongerPassValidation() {
+		patientService.voidPatient(patient, "for testing");
+		Context.flushSession();
+		Context.clearSession();
+		
+		// Stop visit 102 while entry 3 stays open on it, as AutoCloseVisitsTask does when it bypasses the
+		// visit handler. An open entry on a stopped visit fails QueueEntryValidator.
+		Visit visit = visitService.getVisit(102);
+		visit.setStopDatetime(new Date());
+		visitService.saveVisit(visit);
+		Context.flushSession();
+		Context.clearSession();
+		assertThat(queueEntryService.getQueueEntryById(3).get().getEndedAt(), nullValue());
+		
+		// Let any exception escape: the handler flips voided=false on the managed entity before saving, so
+		// asserting on the entry alone would pass even if the unvoid blew up
+		Patient unvoided = patientService.unvoidPatient(patientService.getPatient(PATIENT_ID));
+		Context.flushSession();
+		Context.clearSession();
+		
+		assertThat(unvoided.getVoided(), is(false));
+		assertThat(patientService.getPatient(PATIENT_ID).getVoided(), is(false));
+		assertThat(queueEntryService.getQueueEntryById(3).get().getVoided(), is(false));
 	}
 }

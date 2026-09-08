@@ -61,11 +61,9 @@ public class PatientWithQueueEntriesUnvoidHandler implements UnvoidHandler<Patie
 			if (!wasVoidedWithPatient(qe, originalVoidingUser, originalVoidedDate)) {
 				continue;
 			}
-			qe.setVoided(false);
-			qe.setVoidReason(null);
-			qe.setVoidedBy(null);
-			qe.setDateVoided(null);
-			queueEntryService.saveQueueEntry(qe);
+			// unvoid rather than save: saving would run the validator, and an entry that no longer validates
+			// (e.g. still open on a visit that was stopped meanwhile) must not block restoring the patient
+			queueEntryService.unvoidQueueEntry(qe);
 			unvoidedCount++;
 			log.trace("Unvoided queue entry " + qe);
 		}

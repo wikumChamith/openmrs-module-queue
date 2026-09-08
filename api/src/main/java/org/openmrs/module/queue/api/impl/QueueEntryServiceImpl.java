@@ -202,6 +202,18 @@ public class QueueEntryServiceImpl extends BaseOpenmrsService implements QueueEn
 	}
 	
 	/**
+	 * @see QueueEntryService#unvoidQueueEntry(QueueEntry)
+	 */
+	@Override
+	public void unvoidQueueEntry(QueueEntry queueEntry) {
+		queueEntry.setVoided(false);
+		queueEntry.setVoidReason(null);
+		queueEntry.setDateVoided(null);
+		queueEntry.setVoidedBy(null);
+		dao.createOrUpdate(queueEntry);
+	}
+	
+	/**
 	 * @see QueueEntryService#purgeQueueEntry(org.openmrs.module.queue.model.QueueEntry)
 	 */
 	@Override
