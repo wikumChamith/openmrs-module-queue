@@ -15,6 +15,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 
 import java.util.Arrays;
 import java.util.Date;
@@ -161,5 +162,54 @@ public class PatientWithQueueEntriesVoidHandlerTest extends BaseModuleContextSen
 			assertThat("queue entry " + id + " should be voided", qe.getVoided(), is(true));
 			assertThat(qe.getVoidReason(), equalTo("Merged with patient #" + OTHER_PATIENT_ID));
 		}
+	}
+	
+	@Test
+	public void shouldUnvoidQueueEntriesWhenPatientIsUnvoided() {
+		patientService.voidPatient(patient, "for testing");
+		Context.flushSession();
+		Context.clearSession();
+		patient = patientService.getPatient(PATIENT_ID);
+		assertThat(patient.getVoided(), is(true));
+		for (int id : new int[] { 1, 2, 3 }) {
+			assertThat(queueEntryService.getQueueEntryById(id).get().getVoided(), is(true));
+		}
+		
+		patient = patientService.unvoidPatient(patient);
+		Context.flushSession();
+		Context.clearSession();
+		
+		assertThat(patientService.getPatient(PATIENT_ID).getVoided(), is(false));
+		for (int id : new int[] { 1, 2, 3 }) {
+			QueueEntry qe = queueEntryService.getQueueEntryById(id).get();
+			assertThat("queue entry " + id + " should be unvoided", qe.getVoided(), is(false));
+			assertThat(qe.getVoidReason(), nullValue());
+			assertThat(qe.getDateVoided(), nullValue());
+			assertThat(qe.getVoidedBy(), nullValue());
+		}
+		
+		// Entries are visible again in the default search
+		QueueEntrySearchCriteria activeForPatient = new QueueEntrySearchCriteria();
+		activeForPatient.setPatient(patientService.getPatient(PATIENT_ID));
+		activeForPatient.setIsEnded(false);
+		assertThat(
+		    queueEntryService.getQueueEntries(activeForPatient).stream().map(QueueEntry::getId).collect(Collectors.toList()),
+		    containsInAnyOrder(2, 3));
+	}
+	
+	@Test
+	public void shouldNotUnvoidQueueEntriesThatWereVoidedIndependently() {
+		// Entry 10 was voided on its own in 2022, long before the patient is voided here
+		patientService.voidPatient(patient, "for testing");
+		Context.flushSession();
+		Context.clearSession();
+		
+		patientService.unvoidPatient(patientService.getPatient(PATIENT_ID));
+		Context.flushSession();
+		Context.clearSession();
+		
+		QueueEntry independentlyVoided = queueEntryService.getQueueEntryById(10).get();
+		assertThat(independentlyVoided.getVoided(), is(true));
+		assertThat(independentlyVoided.getDateVoided(), notNullValue());
 	}
 }

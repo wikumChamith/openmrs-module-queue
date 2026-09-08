@@ -9,7 +9,6 @@
  */
 package org.openmrs.module.queue.api;
 
-import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
@@ -18,8 +17,6 @@ import org.apache.commons.logging.LogFactory;
 import org.openmrs.Patient;
 import org.openmrs.User;
 import org.openmrs.annotation.Handler;
-import org.openmrs.api.APIException;
-import org.openmrs.api.ValidationException;
 import org.openmrs.api.handler.VoidHandler;
 import org.openmrs.module.queue.api.search.QueueEntrySearchCriteria;
 import org.openmrs.module.queue.model.QueueEntry;
@@ -31,8 +28,10 @@ import org.springframework.beans.factory.annotation.Qualifier;
  * about queue entries, so nothing in its void cascade touches them; without this handler a voided
  * patient's queue entries would remain active and keep appearing in service queues.
  * <p>
- * Note that this also fires when patients are merged, since core voids the non-preferred patient.
- * Queue entries are not reassigned to the preferred patient; they are voided with the merge reason.
+ * Entries are stamped with the patient's void date and user so that
+ * {@link PatientWithQueueEntriesUnvoidHandler} can restore exactly these entries if the patient is
+ * unvoided. This also fires when patients are merged, since core voids the non-preferred patient
+ * after moving its visits to the preferred one; the entries are voided with the merge reason.
  */
 @Handler(supports = Patient.class)
 public class PatientWithQueueEntriesVoidHandler implements VoidHandler<Patient> {
@@ -53,33 +52,27 @@ public class PatientWithQueueEntriesVoidHandler implements VoidHandler<Patient> 
 		}
 		QueueEntrySearchCriteria criteria = new QueueEntrySearchCriteria();
 		criteria.setPatient(patient);
+		// By the time this runs, the patient may already be flagged as voided in the session, and the
+		// default search hides entries of voided patients (see QueueEntryDaoImpl), so include voided
+		// rows in the search and skip the ones that are already voided
 		criteria.setIncludedVoided(true);
-		List<QueueEntry> toVoid = new ArrayList<>();
-		for (QueueEntry qe : queueEntryService.getQueueEntries(criteria)) {
-			if (!qe.getVoided()) {
-				qe.setVoided(true);
-				qe.setVoidReason(voidReason);
-				qe.setVoidedBy(voidingUser);
-				qe.setDateVoided(voidedDate);
-				toVoid.add(qe);
+		List<QueueEntry> queueEntries = queueEntryService.getQueueEntries(criteria);
+		int voidedCount = 0;
+		for (QueueEntry qe : queueEntries) {
+			if (qe.getVoided()) {
+				continue;
 			}
-		}
-		if (toVoid.isEmpty()) {
-			return;
-		}
-		log.info("Voiding " + toVoid.size() + " queue entries of patient " + patient.getPatientId() + " with reason: "
-		        + voidReason);
-		// Mark every entry voided before saving any of them: saving runs the queue entry validator, whose
-		// duplicate check queries the database, and Hibernate flushes all pending voids before that query
-		for (QueueEntry qe : toVoid) {
-			try {
-				queueEntryService.saveQueueEntry(qe);
-			}
-			catch (ValidationException e) {
-				throw new APIException("Unable to void queue entry " + qe.getQueueEntryId() + " while voiding patient "
-				        + patient.getPatientId() + ": " + e.getMessage(), e);
-			}
+			qe.setVoided(true);
+			qe.setVoidReason(voidReason);
+			qe.setVoidedBy(voidingUser);
+			qe.setDateVoided(voidedDate);
+			queueEntryService.saveQueueEntry(qe);
+			voidedCount++;
 			log.trace("Voided queue entry " + qe + " on " + voidedDate);
+		}
+		if (voidedCount > 0) {
+			log.info("Voided " + voidedCount + " queue entries of patient " + patient.getPatientId() + " with reason: "
+			        + voidReason);
 		}
 	}
 }

@@ -9,7 +9,6 @@
  */
 package org.openmrs.module.queue.api;
 
-import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
@@ -56,19 +55,17 @@ public class VisitWithQueueEntriesSaveHandler implements SaveHandler<Visit>, Voi
 		if (visit.getVisitId() != null && visit.getVoided()) {
 			QueueEntrySearchCriteria criteria = new QueueEntrySearchCriteria();
 			criteria.setVisit(visit);
+			// The visit's patient may itself be voided, which would hide its entries from the default search
 			criteria.setIncludedVoided(true);
-			List<QueueEntry> toVoid = new ArrayList<>();
-			for (QueueEntry qe : queueEntryService.getQueueEntries(criteria)) {
+			List<QueueEntry> queueEntries = queueEntryService.getQueueEntries(criteria);
+			for (QueueEntry qe : queueEntries) {
 				if (!qe.getVoided()) {
 					qe.setVoided(true);
 					qe.setVoidReason(visit.getVoidReason());
 					qe.setVoidedBy(visit.getVoidedBy());
 					qe.setDateVoided(visit.getDateVoided());
-					toVoid.add(qe);
+					queueEntryService.saveQueueEntry(qe);
 				}
-			}
-			for (QueueEntry qe : toVoid) {
-				queueEntryService.saveQueueEntry(qe);
 				log.trace("Voided queue entry " + qe + " on " + date);
 			}
 		}
