@@ -114,4 +114,14 @@ public class VisitWithQueueEntriesSaveHandlerTest extends BaseModuleContextSensi
 		assertThat(queueEntry.getDateVoided(), equalTo(visit.getDateVoided()));
 		assertThat(queueEntry.getVoidedBy(), equalTo(visit.getVoidedBy()));
 	}
+	
+	@Test
+	public void shouldVoidOverlappingQueueEntriesInTheSameQueueIfVisitIsVoided() {
+		executeDataSet("org/openmrs/module/queue/api/dao/QueueEntryDaoTest_overlappingEntriesInitialDataset.xml");
+		visit.setVoided(true);
+		visit.setVoidReason("for testing");
+		visitService.saveVisit(visit);
+		assertTrue(queueEntryService.getQueueEntryById(3).get().getVoided());
+		assertTrue(queueEntryService.getQueueEntryById(12).get().getVoided());
+	}
 }
