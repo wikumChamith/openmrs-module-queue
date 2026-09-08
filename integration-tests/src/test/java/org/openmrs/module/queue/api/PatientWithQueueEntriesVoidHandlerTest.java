@@ -145,4 +145,21 @@ public class PatientWithQueueEntriesVoidHandlerTest extends BaseModuleContextSen
 		assertThat(voided.getVoided(), is(true));
 		assertThat(queueEntryService.getQueueEntries(criteria), hasSize(0));
 	}
+	
+	@Test
+	public void shouldVoidQueueEntriesWhenPatientIsMergedIntoAnother() throws Exception {
+		// Core moves the non-preferred patient's visits to the preferred patient, then voids the non-preferred one
+		Patient preferred = patientService.getPatient(OTHER_PATIENT_ID);
+		patientService.mergePatients(preferred, patient);
+		
+		Context.flushSession();
+		Context.clearSession();
+		
+		assertThat(patientService.getPatient(PATIENT_ID).getVoided(), is(true));
+		for (int id : new int[] { 1, 2, 3 }) {
+			QueueEntry qe = queueEntryService.getQueueEntryById(id).get();
+			assertThat("queue entry " + id + " should be voided", qe.getVoided(), is(true));
+			assertThat(qe.getVoidReason(), equalTo("Merged with patient #" + OTHER_PATIENT_ID));
+		}
+	}
 }
