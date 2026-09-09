@@ -65,19 +65,13 @@ public class PatientWithQueueEntriesUnvoidHandler implements UnvoidHandler<Patie
 			List<QueueEntry> queueEntries = queueEntryService.getQueueEntries(criteria);
 			int unvoidedCount = 0;
 			for (QueueEntry qe : queueEntries) {
-				if (!wasVoidedWithPatient(qe, originalVoidingUser, originalVoidedDate)) {
-					continue;
+				if (shouldRestore(qe, originalVoidingUser, originalVoidedDate)) {
+					// unvoid rather than save: saving would run the validator, and an entry that no longer validates
+					// (e.g. still open on a visit that was stopped meanwhile) must not block restoring the patient
+					queueEntryService.unvoidQueueEntry(qe);
+					unvoidedCount++;
+					log.trace("Unvoided queue entry " + qe);
 				}
-				// an entry on a voided visit was taken down by VisitWithQueueEntriesSaveHandler, not by this
-				// cascade; restoring it would put an active entry back on a visit that is still voided
-				if (qe.getVisit() != null && qe.getVisit().getVoided()) {
-					continue;
-				}
-				// unvoid rather than save: saving would run the validator, and an entry that no longer validates
-				// (e.g. still open on a visit that was stopped meanwhile) must not block restoring the patient
-				queueEntryService.unvoidQueueEntry(qe);
-				unvoidedCount++;
-				log.trace("Unvoided queue entry " + qe);
 			}
 			if (unvoidedCount > 0) {
 				log.info("Unvoided " + unvoidedCount + " queue entries of patient " + patient.getPatientId());
@@ -89,8 +83,16 @@ public class PatientWithQueueEntriesUnvoidHandler implements UnvoidHandler<Patie
 		}
 	}
 	
-	private static boolean wasVoidedWithPatient(QueueEntry qe, User originalVoidingUser, Date originalVoidedDate) {
+	/**
+	 * @return true if the entry was voided together with the patient and can be restored with it. An
+	 *         entry on a voided visit was taken down by VisitWithQueueEntriesSaveHandler, not by this
+	 *         cascade; restoring it would put an active entry back on a visit that is still voided.
+	 */
+	private static boolean shouldRestore(QueueEntry qe, User originalVoidingUser, Date originalVoidedDate) {
 		if (!qe.getVoided() || qe.getDateVoided() == null) {
+			return false;
+		}
+		if (qe.getVisit() != null && qe.getVisit().getVoided()) {
 			return false;
 		}
 		if (qe.getDateVoided().getTime() != originalVoidedDate.getTime()) {
