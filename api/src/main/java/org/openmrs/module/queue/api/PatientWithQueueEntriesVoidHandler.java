@@ -31,7 +31,10 @@ import org.springframework.beans.factory.annotation.Qualifier;
  * Entries are stamped with the patient's void date and user so that
  * {@link PatientWithQueueEntriesUnvoidHandler} can restore exactly these entries if the patient is
  * unvoided. This also fires when patients are merged, since core voids the non-preferred patient
- * after moving its visits to the preferred one; the entries are voided with the merge reason.
+ * after moving its visits to the preferred one; entries on visits that are still open are voided
+ * with the merge reason. A merge can still fail before reaching this handler if a queue entry is
+ * left open on a visit that has already been stopped, because moving that visit re-validates the
+ * entry against the wrong patient; that pre-existing gap is not covered here.
  */
 @Handler(supports = Patient.class)
 public class PatientWithQueueEntriesVoidHandler implements VoidHandler<Patient> {
