@@ -91,8 +91,13 @@ public class QueueEntryServiceImpl extends BaseOpenmrsService implements QueueEn
 	 */
 	@Override
 	public QueueEntry saveQueueEntry(QueueEntry queueEntry) {
-		Double sortWeight = getSortWeightGenerator().generateSortWeight(queueEntry);
-		queueEntry.setSortWeight(sortWeight);
+		// A voided entry takes no part in queue ordering, so leave its sort weight alone. This also keeps
+		// void cascades (patient or visit voided) from reading module configuration the acting user may
+		// not be privileged to see, since generators may resolve global properties and concept sets.
+		if (!Boolean.TRUE.equals(queueEntry.getVoided()) || queueEntry.getSortWeight() == null) {
+			Double sortWeight = getSortWeightGenerator().generateSortWeight(queueEntry);
+			queueEntry.setSortWeight(sortWeight);
+		}
 		return dao.createOrUpdate(queueEntry);
 	}
 	

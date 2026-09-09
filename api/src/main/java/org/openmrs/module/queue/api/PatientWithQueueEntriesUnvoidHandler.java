@@ -17,9 +17,11 @@ import org.apache.commons.logging.LogFactory;
 import org.openmrs.Patient;
 import org.openmrs.User;
 import org.openmrs.annotation.Handler;
+import org.openmrs.api.context.Context;
 import org.openmrs.api.handler.UnvoidHandler;
 import org.openmrs.module.queue.api.search.QueueEntrySearchCriteria;
 import org.openmrs.module.queue.model.QueueEntry;
+import org.openmrs.module.queue.utils.PrivilegeConstants;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 
@@ -49,26 +51,41 @@ public class PatientWithQueueEntriesUnvoidHandler implements UnvoidHandler<Patie
 	 */
 	@Override
 	public void handle(Patient patient, User originalVoidingUser, Date originalVoidedDate, String unused) {
-		if (patient.getPatientId() == null || originalVoidedDate == null) {
-			return;
-		}
-		QueueEntrySearchCriteria criteria = new QueueEntrySearchCriteria();
-		criteria.setPatient(patient);
-		criteria.setIncludedVoided(true);
-		List<QueueEntry> queueEntries = queueEntryService.getQueueEntries(criteria);
-		int unvoidedCount = 0;
-		for (QueueEntry qe : queueEntries) {
-			if (!wasVoidedWithPatient(qe, originalVoidingUser, originalVoidedDate)) {
-				continue;
+		// Voiding or unvoiding is driven by core services whose callers need not hold queue privileges,
+		// so grant them for the duration of this cascade, as core's PatientDataVoidHandler does
+		Context.addProxyPrivilege(PrivilegeConstants.GET_QUEUE_ENTRIES);
+		Context.addProxyPrivilege(PrivilegeConstants.MANAGE_QUEUE_ENTRIES);
+		try {
+			if (patient.getPatientId() == null || originalVoidedDate == null) {
+				return;
 			}
-			// unvoid rather than save: saving would run the validator, and an entry that no longer validates
-			// (e.g. still open on a visit that was stopped meanwhile) must not block restoring the patient
-			queueEntryService.unvoidQueueEntry(qe);
-			unvoidedCount++;
-			log.trace("Unvoided queue entry " + qe);
+			QueueEntrySearchCriteria criteria = new QueueEntrySearchCriteria();
+			criteria.setPatient(patient);
+			criteria.setIncludedVoided(true);
+			List<QueueEntry> queueEntries = queueEntryService.getQueueEntries(criteria);
+			int unvoidedCount = 0;
+			for (QueueEntry qe : queueEntries) {
+				if (!wasVoidedWithPatient(qe, originalVoidingUser, originalVoidedDate)) {
+					continue;
+				}
+				// an entry on a voided visit was taken down by VisitWithQueueEntriesSaveHandler, not by this
+				// cascade; restoring it would put an active entry back on a visit that is still voided
+				if (qe.getVisit() != null && qe.getVisit().getVoided()) {
+					continue;
+				}
+				// unvoid rather than save: saving would run the validator, and an entry that no longer validates
+				// (e.g. still open on a visit that was stopped meanwhile) must not block restoring the patient
+				queueEntryService.unvoidQueueEntry(qe);
+				unvoidedCount++;
+				log.trace("Unvoided queue entry " + qe);
+			}
+			if (unvoidedCount > 0) {
+				log.info("Unvoided " + unvoidedCount + " queue entries of patient " + patient.getPatientId());
+			}
 		}
-		if (unvoidedCount > 0) {
-			log.info("Unvoided " + unvoidedCount + " queue entries of patient " + patient.getPatientId());
+		finally {
+			Context.removeProxyPrivilege(PrivilegeConstants.GET_QUEUE_ENTRIES);
+			Context.removeProxyPrivilege(PrivilegeConstants.MANAGE_QUEUE_ENTRIES);
 		}
 	}
 	

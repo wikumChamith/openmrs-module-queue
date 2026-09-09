@@ -17,9 +17,11 @@ import org.apache.commons.logging.LogFactory;
 import org.openmrs.Patient;
 import org.openmrs.User;
 import org.openmrs.annotation.Handler;
+import org.openmrs.api.context.Context;
 import org.openmrs.api.handler.VoidHandler;
 import org.openmrs.module.queue.api.search.QueueEntrySearchCriteria;
 import org.openmrs.module.queue.model.QueueEntry;
+import org.openmrs.module.queue.utils.PrivilegeConstants;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 
@@ -50,32 +52,42 @@ public class PatientWithQueueEntriesVoidHandler implements VoidHandler<Patient> 
 	
 	@Override
 	public void handle(Patient patient, User voidingUser, Date voidedDate, String voidReason) {
-		if (patient.getPatientId() == null) {
-			return;
-		}
-		QueueEntrySearchCriteria criteria = new QueueEntrySearchCriteria();
-		criteria.setPatient(patient);
-		// By the time this runs, the patient may already be flagged as voided in the session, and the
-		// default search hides entries of voided patients (see QueueEntryDaoImpl), so include voided
-		// rows in the search and skip the ones that are already voided
-		criteria.setIncludedVoided(true);
-		List<QueueEntry> queueEntries = queueEntryService.getQueueEntries(criteria);
-		int voidedCount = 0;
-		for (QueueEntry qe : queueEntries) {
-			if (qe.getVoided()) {
-				continue;
+		// Voiding or unvoiding is driven by core services whose callers need not hold queue privileges,
+		// so grant them for the duration of this cascade, as core's PatientDataVoidHandler does
+		Context.addProxyPrivilege(PrivilegeConstants.GET_QUEUE_ENTRIES);
+		Context.addProxyPrivilege(PrivilegeConstants.MANAGE_QUEUE_ENTRIES);
+		try {
+			if (patient.getPatientId() == null) {
+				return;
 			}
-			qe.setVoided(true);
-			qe.setVoidReason(voidReason);
-			qe.setVoidedBy(voidingUser);
-			qe.setDateVoided(voidedDate);
-			queueEntryService.saveQueueEntry(qe);
-			voidedCount++;
-			log.trace("Voided queue entry " + qe + " on " + voidedDate);
+			QueueEntrySearchCriteria criteria = new QueueEntrySearchCriteria();
+			criteria.setPatient(patient);
+			// By the time this runs, the patient may already be flagged as voided in the session, and the
+			// default search hides entries of voided patients (see QueueEntryDaoImpl), so include voided
+			// rows in the search and skip the ones that are already voided
+			criteria.setIncludedVoided(true);
+			List<QueueEntry> queueEntries = queueEntryService.getQueueEntries(criteria);
+			int voidedCount = 0;
+			for (QueueEntry qe : queueEntries) {
+				if (qe.getVoided()) {
+					continue;
+				}
+				qe.setVoided(true);
+				qe.setVoidReason(voidReason);
+				qe.setVoidedBy(voidingUser);
+				qe.setDateVoided(voidedDate);
+				queueEntryService.saveQueueEntry(qe);
+				voidedCount++;
+				log.trace("Voided queue entry " + qe + " on " + voidedDate);
+			}
+			if (voidedCount > 0) {
+				log.info("Voided " + voidedCount + " queue entries of patient " + patient.getPatientId() + " with reason: "
+				        + voidReason);
+			}
 		}
-		if (voidedCount > 0) {
-			log.info("Voided " + voidedCount + " queue entries of patient " + patient.getPatientId() + " with reason: "
-			        + voidReason);
+		finally {
+			Context.removeProxyPrivilege(PrivilegeConstants.GET_QUEUE_ENTRIES);
+			Context.removeProxyPrivilege(PrivilegeConstants.MANAGE_QUEUE_ENTRIES);
 		}
 	}
 }

@@ -243,4 +243,114 @@ public class PatientWithQueueEntriesVoidHandlerTest extends BaseModuleContextSen
 		assertThat(patientService.getPatient(PATIENT_ID).getVoided(), is(false));
 		assertThat(queueEntryService.getQueueEntryById(3).get().getVoided(), is(false));
 	}
+	
+	@Test
+	public void shouldNotUnvoidQueueEntriesWhoseVisitIsStillVoided() {
+		// REST deletes a patient by voiding every visit first, so the visit cascade voids the entries and
+		// the patient cascade finds nothing left to do
+		for (int visitId : new int[] { 101, 102 }) {
+			Visit visit = visitService.getVisit(visitId);
+			visit.setVoided(true);
+			visit.setVoidReason("for testing");
+			visitService.saveVisit(visit);
+		}
+		patientService.voidPatient(patient, "for testing");
+		Context.flushSession();
+		Context.clearSession();
+		patient = patientService.getPatient(PATIENT_ID);
+		
+		// Both stamps are taken within the same request and the column holds whole seconds, so in
+		// production they read back equal; force that here rather than depend on the clock
+		for (int id : new int[] { 1, 2, 3 }) {
+			QueueEntry qe = queueEntryService.getQueueEntryById(id).get();
+			assertThat(qe.getVoided(), is(true));
+			qe.setDateVoided(patient.getDateVoided());
+			qe.setVoidedBy(patient.getVoidedBy());
+			queueEntryService.saveQueueEntry(qe);
+		}
+		Context.flushSession();
+		Context.clearSession();
+		
+		patientService.unvoidPatient(patientService.getPatient(PATIENT_ID));
+		Context.flushSession();
+		Context.clearSession();
+		
+		assertThat(patientService.getPatient(PATIENT_ID).getVoided(), is(false));
+		for (int id : new int[] { 1, 2, 3 }) {
+			QueueEntry qe = queueEntryService.getQueueEntryById(id).get();
+			assertThat("queue entry " + id + " should stay voided with its visit", qe.getVoided(), is(true));
+			assertThat(qe.getVisit().getVoided(), is(true));
+		}
+		QueueEntrySearchCriteria active = new QueueEntrySearchCriteria();
+		active.setPatient(patientService.getPatient(PATIENT_ID));
+		active.setIsEnded(false);
+		assertThat(queueEntryService.getQueueEntries(active), hasSize(0));
+	}
+	
+	@Test
+	public void shouldVoidQueueEntriesForUserWithoutQueuePrivileges() {
+		asUserWithoutQueuePrivileges(() -> patientService.voidPatient(patient, "for testing"),
+		    org.openmrs.util.PrivilegeConstants.DELETE_PATIENTS, org.openmrs.util.PrivilegeConstants.GET_PATIENTS,
+		    org.openmrs.util.PrivilegeConstants.GET_ENCOUNTERS, org.openmrs.util.PrivilegeConstants.GET_USERS,
+		    org.openmrs.util.PrivilegeConstants.GET_PATIENT_COHORTS);
+		
+		assertThat(patientService.getPatient(PATIENT_ID).getVoided(), is(true));
+		for (int id : new int[] { 1, 2, 3 }) {
+			assertThat(queueEntryService.getQueueEntryById(id).get().getVoided(), is(true));
+		}
+	}
+	
+	@Test
+	public void shouldUnvoidQueueEntriesForUserWithoutQueuePrivileges() {
+		patientService.voidPatient(patient, "for testing");
+		Context.flushSession();
+		Context.clearSession();
+		Patient voided = patientService.getPatient(PATIENT_ID);
+		
+		// core re-validates the patient on unvoid, and its validators read global properties
+		asUserWithoutQueuePrivileges(() -> patientService.unvoidPatient(voided),
+		    org.openmrs.util.PrivilegeConstants.DELETE_PATIENTS, org.openmrs.util.PrivilegeConstants.GET_PATIENTS,
+		    org.openmrs.util.PrivilegeConstants.GET_ENCOUNTERS, org.openmrs.util.PrivilegeConstants.GET_ORDERS,
+		    org.openmrs.util.PrivilegeConstants.GET_USERS, org.openmrs.util.PrivilegeConstants.EDIT_COHORTS,
+		    org.openmrs.util.PrivilegeConstants.EDIT_PATIENTS, org.openmrs.util.PrivilegeConstants.GET_GLOBAL_PROPERTIES);
+		
+		assertThat(patientService.getPatient(PATIENT_ID).getVoided(), is(false));
+		for (int id : new int[] { 1, 2, 3 }) {
+			assertThat(queueEntryService.getQueueEntryById(id).get().getVoided(), is(false));
+		}
+	}
+	
+	@Test
+	public void shouldDoNothingWithoutQueuePrivilegesForPatientWithoutQueueEntries() {
+		Patient noEntries = patientService.getPatient(6);
+		asUserWithoutQueuePrivileges(() -> patientService.voidPatient(noEntries, "for testing"),
+		    org.openmrs.util.PrivilegeConstants.DELETE_PATIENTS, org.openmrs.util.PrivilegeConstants.GET_PATIENTS,
+		    org.openmrs.util.PrivilegeConstants.GET_ENCOUNTERS, org.openmrs.util.PrivilegeConstants.GET_USERS,
+		    org.openmrs.util.PrivilegeConstants.GET_PATIENT_COHORTS);
+		assertThat(patientService.getPatient(6).getVoided(), is(true));
+	}
+	
+	/**
+	 * Runs the action as "butch" from the standard test dataset, who has the Provider role and no
+	 * privileges, proxying only the given core privileges. Queue privileges are deliberately absent, so
+	 * the handlers must obtain them on their own.
+	 */
+	private void asUserWithoutQueuePrivileges(Runnable action, String... corePrivileges) {
+		Context.becomeUser("3-4");
+		for (String privilege : corePrivileges) {
+			Context.addProxyPrivilege(privilege);
+		}
+		try {
+			assertThat(Context.hasPrivilege(org.openmrs.module.queue.utils.PrivilegeConstants.GET_QUEUE_ENTRIES), is(false));
+			assertThat(Context.hasPrivilege(org.openmrs.module.queue.utils.PrivilegeConstants.MANAGE_QUEUE_ENTRIES),
+			    is(false));
+			action.run();
+		}
+		finally {
+			for (String privilege : corePrivileges) {
+				Context.removeProxyPrivilege(privilege);
+			}
+			authenticate();
+		}
+	}
 }
